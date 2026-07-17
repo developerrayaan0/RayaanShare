@@ -1,65 +1,31 @@
-const hostBtn = document.getElementById("hostBtn");
-const connectBtn = document.getElementById("connectBtn");
-const copyBtn = document.getElementById("copyBtn");
-const sendBtn = document.getElementById("sendBtn");
+let selectedFile = null;
 
-const myId = document.getElementById("myId");
-const friendId = document.getElementById("friendId");
-const status = document.getElementById("status");
+let receivedChunks = [];
+let receivedFileName = "";
+let receivedFileSize = 0;
 
-let peer = null;
-let conn = null;
+const CHUNK_SIZE = 64 * 1024;
 
-function updateStatus(text) {
-    status.textContent = text;
-}
+let fileReader;
+let offset = 0;
 
-hostBtn.onclick = () => {
-    
-    if (peer) peer.destroy();
-    
-    updateStatus("Creating Host...");
-    
-    peer = new Peer();
-    
-    peer.on("open", (id) => {
-        
-        myId.value = id;
-        
-        updateStatus("Waiting for friend...");
-        
-    });
-    
-    peer.on("connection", (connection) => {
-        
-        conn = connection;
-        
-        setupConnection();
-        
-    });
-    
-};
+const fileInput = document.getElementById("fileInput");
+const progress = document.getElementById("progress");
 
-connectBtn.onclick = () => {
+fileInput.onchange = () => {
     
-    if (friendId.value.trim() == "") {
-        alert("Enter Friend ID");
-        return;
+    selectedFile = fileInput.files[0];
+    
+    if (selectedFile) {
+        
+        updateStatus(
+            selectedFile.name +
+            " (" +
+            Math.round(selectedFile.size / 1024 / 1024) +
+            " MB)"
+        );
+        
     }
-    
-    if (peer) peer.destroy();
-    
-    updateStatus("Connecting...");
-    
-    peer = new Peer();
-    
-    peer.on("open", () => {
-        
-        conn = peer.connect(friendId.value.trim());
-        
-        setupConnection();
-        
-    });
     
 };
 
@@ -73,6 +39,60 @@ function setupConnection() {
         
     });
     
+    conn.on("data", (data) => {
+    
+    if (data.type === "info") {
+        
+        receivedChunks = [];
+        receivedFileName = data.name;
+        receivedFileSize = data.size;
+        
+        progress.value = 0;
+        
+        updateStatus("Receiving: " + receivedFileName);
+        return;
+    }
+    
+    if (data.type === "done") {
+        
+        const blob = new Blob(receivedChunks);
+        
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement("a");
+        
+        a.href = url;
+        a.download = receivedFileName;
+        
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        
+        URL.revokeObjectURL(url);
+        
+        updateStatus("Download Complete");
+        progress.value = 100;
+        
+        return;
+    }
+    
+    if (data instanceof ArrayBuffer) {
+        
+        receivedChunks.push(data);
+        
+        let receivedSize = 0;
+        
+        for (const chunk of receivedChunks) {
+            receivedSize += chunk.byteLength;
+        }
+        
+        progress.value =
+            (receivedSize / receivedFileSize) * 100;
+        
+    }
+    
+});
+    
     conn.on("close", () => {
         
         updateStatus("Disconnected");
@@ -81,22 +101,64 @@ function setupConnection() {
         
     });
     
-    conn.on("error", (err) => {
-        
-        console.log(err);
-        
-        updateStatus("Connection Error");
-        
-    });
-    
 }
 
-copyBtn.onclick = () => {
+sendBtn.onclick = () => {
     
-    if (myId.value == "") return;
+    if (!selectedFile) {
+        alert("Choose a file first");
+        return;
+    }
     
-    navigator.clipboard.writeText(myId.value);
+    conn.send({
+        type: "info",
+        name: selectedFile.name,
+        size: selectedFile.size
+    });
     
-    alert("Copied");
-    
+    offset = 0;
+
+updateStatus("Sending...");
+
+sendNextChunk();
 };
+
+function sendNextChunk() {
+    
+    if (offset >= selectedFile.size) {
+        
+        conn.send({
+            type: "done"
+        });
+        
+        updateStatus("Transfer Complete");
+        progress.value = 100;
+        
+        offset = 0;
+        
+        return;
+    }
+    
+    const slice = selectedFile.slice(
+        offset,
+        offset + CHUNK_SIZE
+    );
+    
+    fileReader = new FileReader();
+    
+    fileReader.onload = (e) => {
+        
+        conn.send(e.target.result);
+        
+        offset += CHUNK_SIZE;
+        
+        progress.value =
+            (offset / selectedFile.size) * 100;
+        
+        sendNextChunk();
+        
+    };
+    
+    fileReader.readAsArrayBuffer(slice);
+    
+}
