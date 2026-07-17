@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Share</title>
+
+    <link rel="stylesheet" href="style.css">
+
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+
+    <h1>P2P File Share</h1>
+
+    <div class="card">
+
+        <button id="hostBtn">
+            Host
+        </button>
+
+        <p>Your ID</p>
+
+        <input
+            type="text"
+            id="myId"
+            readonly>
+
+        <button id="copyBtn">
+            Copy ID
+        </button>
+
+    </div>
+
+    <div class="card">
+
+        <p>Friend's ID</p>
+
+        <input
+            type="text"
+            id="friendId"
+            placeholder="Enter friend's ID">
+
+        <button id="connectBtn">
+            Connect
+        </button>
+
+    </div>
+
+    <div class="card">
+
+        <input
+            type="file"
+            id="fileInput">
+
+        <button id="sendBtn" disabled>
+            Send File
+        </button>
+
+    </div>
+
+    <div class="card">
+
+        <progress
+            id="progress"
+            value="0"
+            max="100">
+        </progress>
+
+        <p id="status">
+            Not Connected
+        </p>
+
+    </div>
+
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>
