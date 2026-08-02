@@ -96,7 +96,12 @@ connectBtn.onclick = () => {
 
     peer.on("open", () => {
 
-        conn = peer.connect(id, { reliable: true });
+        // serialization: "none" sends raw ArrayBuffers straight to the
+        // WebRTC data channel, skipping PeerJS's default msgpack-style
+        // encoder (BinaryPack). That encoder re-chunks and copies binary
+        // payloads internally and is the main reason throughput was
+        // capped well below actual bandwidth.
+        conn = peer.connect(id, { reliable: true, serialization: "none" });
 
         setupConnection();
 
@@ -140,82 +145,83 @@ function setupConnection() {
 
     conn.on("data", (data) => {
 
-        if (data.type === "meta") {
+        // Control messages (meta / done) are sent as JSON strings.
+        // Everything else is a raw binary chunk (ArrayBuffer).
+        if (typeof data === "string") {
 
-            fileInfo = data;
+            const msg = JSON.parse(data);
 
-            receivedChunks = [];
-            receivedSize = 0;
+            if (msg.type === "meta") {
 
-            receiving = true;
+                fileInfo = msg;
 
-            totalChunks = Math.ceil(data.size / CHUNK_SIZE);
+                receivedChunks = [];
+                receivedSize = 0;
 
-            progress.value = 0;
+                receiving = true;
 
-            lastUpdateTime = Date.now();
-            lastBytes = 0;
+                totalChunks = Math.ceil(msg.size / CHUNK_SIZE);
 
-            updateStatus(
-                "Receiving: " +
-                data.name +
-                " (" +
-                data.sizeText +
-                ")"
-            );
+                progress.value = 0;
 
-            return;
-        }
+                lastUpdateTime = Date.now();
+                lastBytes = 0;
 
-        if (data.type === "chunk") {
+                updateStatus(
+                    "Receiving: " +
+                    msg.name +
+                    " (" +
+                    msg.sizeText +
+                    ")"
+                );
 
-            if (!receiving || !fileInfo) {
-                return;
+            } else if (msg.type === "done") {
+
+                receiving = false;
+
+                progress.value = 100;
+
+                updateStatus("Saving File...");
+
+                transferFinished = true;
+
+                saveReceivedFile();
+
             }
 
-            receivedChunks.push(data.data);
-
-            receivedSize += data.data.byteLength;
-
-            bytesReceived = receivedSize;
-
-            chunksReceived++;
-
-            progress.value = Math.floor(
-                (receivedSize / fileInfo.size) * 100
-            );
-
-            updateStatus(
-                "Receiving... " +
-                progress.value +
-                "% | " +
-                chunksReceived +
-                "/" +
-                totalChunks +
-                " Chunks | " +
-                getTransferSpeed(bytesReceived)
-            );
-
-            // No per-chunk ack needed anymore — the sender uses
-            // dataChannel.bufferedAmount for flow control instead.
-
             return;
         }
 
-        if (data.type === "done") {
-
-            receiving = false;
-
-            progress.value = 100;
-
-            updateStatus("Saving File...");
-
-            transferFinished = true;
-
-            saveReceivedFile();
-
+        // Binary chunk. Depending on browser this may arrive as
+        // ArrayBuffer or a typed array/Blob-like wrapper — normalize it.
+        if (!receiving || !fileInfo) {
             return;
         }
+
+        const chunk = data instanceof ArrayBuffer ? data : data.buffer || data;
+
+        receivedChunks.push(chunk);
+
+        receivedSize += chunk.byteLength;
+
+        bytesReceived = receivedSize;
+
+        chunksReceived++;
+
+        progress.value = Math.floor(
+            (receivedSize / fileInfo.size) * 100
+        );
+
+        updateStatus(
+            "Receiving... " +
+            progress.value +
+            "% | " +
+            chunksReceived +
+            "/" +
+            totalChunks +
+            " Chunks | " +
+            getTransferSpeed(bytesReceived)
+        );
 
     });
 
@@ -295,10 +301,11 @@ sendBtn.onclick = () => {
 // File Transfer Variables
 // ---------------------------
 
-// Larger chunks = less per-chunk overhead. 256KB is a good balance
-// for WebRTC data channels (max message size is usually ~256KB-1MB
-// depending on browser, so don't go much higher without splitting).
-const CHUNK_SIZE = 256 * 1024; // 256 KB
+// Larger chunks = less per-chunk overhead. Now that we send raw
+// ArrayBuffers (no msgpack re-encoding), 512KB is safe in current
+// Chrome/Firefox/Edge. If you see send errors on older browsers,
+// drop this back to 256 * 1024.
+const CHUNK_SIZE = 512 * 1024; // 512 KB
 
 // Flow-control high-water mark. If the underlying WebRTC send buffer
 // grows past this, we pause reading/sending until it drains. This
@@ -321,12 +328,12 @@ let fileInfo = null;
 
 function sendMetadata(file) {
 
-    conn.send({
+    conn.send(JSON.stringify({
         type: "meta",
         name: file.name,
         size: file.size,
         sizeText: formatFileSize(file.size)
-    });
+    }));
 
 }
 
@@ -388,10 +395,8 @@ function sendFile(file) {
 
         const chunk = e.target.result;
 
-        conn.send({
-            type: "chunk",
-            data: chunk
-        });
+        // Raw send — no wrapping object, no JSON/msgpack encoding.
+        conn.send(chunk);
 
         bytesSent += chunk.byteLength;
         chunksSent++;
@@ -426,9 +431,7 @@ function sendFile(file) {
 
             sending = false;
 
-            conn.send({
-                type: "done"
-            });
+            conn.send(JSON.stringify({ type: "done" }));
 
             const seconds = ((Date.now() - transferStartTime) / 1000).toFixed(1);
 
